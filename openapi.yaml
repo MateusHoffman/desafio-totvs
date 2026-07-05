@@ -1,0 +1,195 @@
+openapi: 3.0.3
+info:
+  title: CaseCellShop API
+  version: 1.0.0
+  description: >
+    Serviço backend da CaseCellShop: catálogo com cache, checkout assíncrono
+    e consulta de status de pedido. Estado 100% em memória, sem infraestrutura externa.
+servers:
+  - url: http://localhost:3000
+    description: Ambiente local (npm run dev)
+
+paths:
+  /products:
+    get:
+      summary: Lista o catálogo com cache TTL e prevenção de stampede
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Catálogo retornado do cache ou do ERP simulado.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationIdResponse'
+            X-Request-Id:
+              $ref: '#/components/headers/RequestIdResponse'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+        '503':
+          description: ERP indisponível e sem cache stale para fallback.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /checkout:
+    post:
+      summary: Inicia um checkout assíncrono sem aguardar o ERP
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '202':
+          description: >
+            Pedido aceito para processamento assíncrono. Replay idempotente retorna o mesmo
+            orderId e o status atual do pedido, sem novo débito de estoque.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationIdResponse'
+            X-Request-Id:
+              $ref: '#/components/headers/RequestIdResponse'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutAccepted'
+        '400':
+          description: >
+            Payload inválido, Idempotency-Key ausente, produto não encontrado ou estoque insuficiente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidPayload:
+                  value: { error: "Payload ou Idempotency-Key inválido" }
+                productNotFound:
+                  value: { error: "Produto não encontrado" }
+                insufficientStock:
+                  value: { error: "Estoque insuficiente" }
+  /orders/{orderId}/status:
+    get:
+      summary: Consulta o status de um pedido
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status atual do pedido.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationIdResponse'
+            X-Request-Id:
+              $ref: '#/components/headers/RequestIdResponse'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Pedido não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  headers:
+    CorrelationIdResponse:
+      description: >
+        Correlation ID (raiz do fluxo, também usado como traceId) que amarra
+        request → cache → worker. Ecoa o valor recebido ou o gerado quando ausente.
+      schema:
+        type: string
+    RequestIdResponse:
+      description: >
+        Request ID único por requisição HTTP (distinto do correlationId).
+        Permite distinguir retries do mesmo cliente dentro do mesmo trace de negócio.
+      schema:
+        type: string
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >
+        Correlation ID que representa a raiz do fluxo (também usado como traceId), distinto
+        do requestId único por requisição. Gerado automaticamente se ausente; ecoado na
+        resposta para rastreabilidade request → cache → worker.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Chave de idempotência para evitar duplo débito em retry ou duplo clique.
+  schemas:
+    Product:
+      type: object
+      required: [id, name, price, stock]
+      properties:
+        id:
+          type: string
+          example: "123"
+        name:
+          type: string
+          example: Capinha A
+        price:
+          type: number
+          format: float
+          example: 29.9
+        stock:
+          type: integer
+          example: 10
+    Order:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          example: ORD-1720000000000-123456
+        status:
+          type: string
+          enum: [PENDING, SUCCESS, FAILED]
+    CheckoutRequest:
+      type: object
+      required: [productId, quantity]
+      properties:
+        productId:
+          type: string
+          example: "123"
+        quantity:
+          type: integer
+          minimum: 1
+          example: 1
+    CheckoutAccepted:
+      type: object
+      required: [orderId, status]
+      properties:
+        orderId:
+          type: string
+          description: Identificador do pedido (mesmo valor em replay idempotente).
+          example: ORD-1720000000000-123456
+        status:
+          type: string
+          enum: [PENDING, SUCCESS, FAILED]
+          description: Status atual do pedido (inclui replay idempotente).
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: Estoque insuficiente

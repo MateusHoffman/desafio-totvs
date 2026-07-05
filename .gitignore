@@ -1,0 +1,21 @@
+# Dependências
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operacional / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Builds (não usamos, mas por segurança)
+dist/
+build/
+
+# Artefatos internos (fora do escopo do desafio)
+tarefas/
+.cursor/
+.claude/
+CLAUDE.md
